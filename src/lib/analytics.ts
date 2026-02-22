@@ -1,4 +1,4 @@
-import { format, startOfWeek, startOfMonth, differenceInCalendarDays, eachYearOfInterval } from "date-fns"
+import { format, startOfWeek, startOfMonth, differenceInCalendarDays, eachYearOfInterval, getDay, getHours } from "date-fns"
 import { fr } from "date-fns/locale"
 import type { WatchEntry, VideoDetail, ChannelDetail, SearchEntry } from "./types"
 
@@ -30,40 +30,42 @@ export function computeOverview(
     }
   }
 
-  const uniqueVideoIds = new Set(entries.filter((e) => e.videoId).map((e) => e.videoId!))
-  const uniqueChannelIds = new Set(entries.filter((e) => e.channelId).map((e) => e.channelId!))
-  const removedCount = entries.filter((e) => e.isRemoved).length
-
+  const uniqueVideoIds = new Set<string>()
+  const uniqueChannelIds = new Set<string>()
+  let removedCount = 0
   let totalWatchTimeSec = 0
+  let minTime = entries[0].timestamp.getTime()
+  let maxTime = entries[0].timestamp.getTime()
+
+  const dayMap = new Map<string, { count: number; watchTimeSec: number }>()
+
   for (const entry of entries) {
-    if (entry.videoId && videoDetails.has(entry.videoId)) {
-      totalWatchTimeSec += videoDetails.get(entry.videoId)!.duration
-    }
+    if (entry.videoId) uniqueVideoIds.add(entry.videoId)
+    if (entry.channelId) uniqueChannelIds.add(entry.channelId)
+    if (entry.isRemoved) removedCount++
+
+    const dur = entry.videoId ? (videoDetails.get(entry.videoId)?.duration ?? 0) : 0
+    totalWatchTimeSec += dur
+
+    const t = entry.timestamp.getTime()
+    if (t < minTime) minTime = t
+    if (t > maxTime) maxTime = t
+
+    const key = format(entry.timestamp, "yyyy-MM-dd")
+    const existing = dayMap.get(key)
+    if (existing) { existing.count++; existing.watchTimeSec += dur }
+    else dayMap.set(key, { count: 1, watchTimeSec: dur })
   }
 
-  const sorted = [...entries].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
-  const start = sorted[0].timestamp
-  const end = sorted[sorted.length - 1].timestamp
+  const start = new Date(minTime)
+  const end = new Date(maxTime)
   const totalDays = Math.max(1, differenceInCalendarDays(end, start) + 1)
   const totalMonths = Math.max(1, totalDays / 30.44)
   const totalYears = Math.max(1, totalDays / 365.25)
 
-  const dayMap = new Map<string, { count: number; watchTimeSec: number }>()
-  for (const entry of entries) {
-    const key = format(entry.timestamp, "yyyy-MM-dd")
-    const existing = dayMap.get(key) || { count: 0, watchTimeSec: 0 }
-    existing.count++
-    if (entry.videoId && videoDetails.has(entry.videoId)) {
-      existing.watchTimeSec += videoDetails.get(entry.videoId)!.duration
-    }
-    dayMap.set(key, existing)
-  }
-
   let mostActive = { date: "", count: 0, watchTimeSec: 0 }
   for (const [date, stats] of dayMap) {
-    if (stats.count > mostActive.count) {
-      mostActive = { date, ...stats }
-    }
+    if (stats.count > mostActive.count) mostActive = { date, ...stats }
   }
 
   return {
@@ -94,6 +96,8 @@ export interface TimelineBucket {
   date: string
   count: number
   watchTimeSec: number
+  dateFrom?: string
+  dateTo?: string
 }
 
 export function computeTimeline(
@@ -106,25 +110,38 @@ export function computeTimeline(
   for (const entry of entries) {
     let key: string
     let label: string
+    let dateFrom: string
+    let dateTo: string
     if (granularity === "day") {
       key = format(entry.timestamp, "yyyy-MM-dd")
       label = format(entry.timestamp, "dd MMM yy", { locale: fr })
+      dateFrom = key
+      dateTo = key
     } else if (granularity === "week") {
       const ws = startOfWeek(entry.timestamp, { weekStartsOn: 1 })
       key = format(ws, "yyyy-MM-dd")
       label = `Sem. ${format(ws, "dd MMM yy", { locale: fr })}`
+      dateFrom = key
+      const we = new Date(ws)
+      we.setDate(we.getDate() + 6)
+      dateTo = format(we, "yyyy-MM-dd")
     } else {
       const ms = startOfMonth(entry.timestamp)
       key = format(ms, "yyyy-MM")
       label = format(ms, "MMM yyyy", { locale: fr })
+      dateFrom = format(ms, "yyyy-MM-dd")
+      const me = new Date(ms.getFullYear(), ms.getMonth() + 1, 0)
+      dateTo = format(me, "yyyy-MM-dd")
     }
 
-    const existing = bucketMap.get(key) || { label, date: key, count: 0, watchTimeSec: 0 }
-    existing.count++
-    if (entry.videoId && videoDetails.has(entry.videoId)) {
-      existing.watchTimeSec += videoDetails.get(entry.videoId)!.duration
+    const existing = bucketMap.get(key)
+    const dur = entry.videoId ? (videoDetails.get(entry.videoId)?.duration ?? 0) : 0
+    if (existing) {
+      existing.count++
+      existing.watchTimeSec += dur
+    } else {
+      bucketMap.set(key, { label, date: key, count: 1, watchTimeSec: dur, dateFrom, dateTo })
     }
-    bucketMap.set(key, existing)
   }
 
   return [...bucketMap.values()].sort((a, b) => a.date.localeCompare(b.date))
@@ -133,21 +150,28 @@ export function computeTimeline(
 export interface HeatmapDay {
   date: string
   count: number
+  watchTimeSec: number
   year: number
   dayOfYear: number
 }
 
-export function computeHeatmap(entries: WatchEntry[]): HeatmapDay[] {
-  const dayMap = new Map<string, number>()
+export function computeHeatmap(
+  entries: WatchEntry[],
+  videoDetails: Map<string, VideoDetail>,
+): HeatmapDay[] {
+  const dayMap = new Map<string, { count: number; watchTimeSec: number }>()
   for (const entry of entries) {
     const key = format(entry.timestamp, "yyyy-MM-dd")
-    dayMap.set(key, (dayMap.get(key) || 0) + 1)
+    const existing = dayMap.get(key)
+    const dur = entry.videoId ? (videoDetails.get(entry.videoId)?.duration ?? 0) : 0
+    if (existing) { existing.count++; existing.watchTimeSec += dur }
+    else dayMap.set(key, { count: 1, watchTimeSec: dur })
   }
-  return [...dayMap.entries()].map(([date, count]) => {
+  return [...dayMap.entries()].map(([date, data]) => {
     const d = new Date(date)
     const startOfYear = new Date(d.getFullYear(), 0, 1)
     const dayOfYear = differenceInCalendarDays(d, startOfYear)
-    return { date, count, year: d.getFullYear(), dayOfYear }
+    return { date, count: data.count, watchTimeSec: data.watchTimeSec, year: d.getFullYear(), dayOfYear }
   })
 }
 
@@ -170,32 +194,24 @@ export function computeChannelStats(
   channelDetails: Map<string, ChannelDetail>,
 ): ChannelStats[] {
   const channelMap = new Map<string, {
-    channelName: string
-    views: number
-    uniqueIds: Set<string>
-    watchTimeSec: number
-    firstSeen: Date
-    lastSeen: Date
+    channelName: string; views: number; uniqueIds: Set<string>
+    watchTimeSec: number; firstSeen: Date; lastSeen: Date
   }>()
 
   for (const entry of entries) {
     if (!entry.channelId || !entry.channelName) continue
+    const dur = entry.videoId ? (videoDetails.get(entry.videoId)?.duration ?? 0) : 0
     const existing = channelMap.get(entry.channelId)
     if (!existing) {
       channelMap.set(entry.channelId, {
-        channelName: entry.channelName,
-        views: 1,
+        channelName: entry.channelName, views: 1,
         uniqueIds: new Set(entry.videoId ? [entry.videoId] : []),
-        watchTimeSec: entry.videoId && videoDetails.has(entry.videoId) ? videoDetails.get(entry.videoId)!.duration : 0,
-        firstSeen: entry.timestamp,
-        lastSeen: entry.timestamp,
+        watchTimeSec: dur, firstSeen: entry.timestamp, lastSeen: entry.timestamp,
       })
     } else {
       existing.views++
       if (entry.videoId) existing.uniqueIds.add(entry.videoId)
-      if (entry.videoId && videoDetails.has(entry.videoId)) {
-        existing.watchTimeSec += videoDetails.get(entry.videoId)!.duration
-      }
+      existing.watchTimeSec += dur
       if (entry.timestamp < existing.firstSeen) existing.firstSeen = entry.timestamp
       if (entry.timestamp > existing.lastSeen) existing.lastSeen = entry.timestamp
     }
@@ -279,9 +295,9 @@ export function computeChannelDiscoveries(entries: WatchEntry[]): ChannelDiscove
   }
 
   if (sorted.length === 0) return []
-  const start = sorted[0].timestamp.getFullYear()
-  const end = sorted[sorted.length - 1].timestamp.getFullYear()
-  const years = eachYearOfInterval({ start: new Date(start, 0), end: new Date(end, 0) })
+  const startY = sorted[0].timestamp.getFullYear()
+  const endY = sorted[sorted.length - 1].timestamp.getFullYear()
+  const years = eachYearOfInterval({ start: new Date(startY, 0), end: new Date(endY, 0) })
 
   return years.map((d) => ({
     year: d.getFullYear(),
@@ -367,6 +383,56 @@ export function computeDurationDiversity(
   }
 
   return buckets.map(({ label, count }) => ({ label, count }))
+}
+
+export interface HourlyBucket {
+  hour: number
+  label: string
+  avgCount: number
+}
+
+export function computeHourlyDistribution(entries: WatchEntry[]): HourlyBucket[] {
+  const hourCounts = new Array(24).fill(0)
+  for (const entry of entries) {
+    hourCounts[getHours(entry.timestamp)]++
+  }
+
+  const daySet = new Set(entries.map((e) => format(e.timestamp, "yyyy-MM-dd")))
+  const totalDays = Math.max(1, daySet.size)
+
+  return hourCounts.map((count, hour) => ({
+    hour,
+    label: `${hour}h`,
+    avgCount: Math.round((count / totalDays) * 100) / 100,
+  }))
+}
+
+const DAY_NAMES = ["Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"]
+
+export interface WeeklyBucket {
+  day: number
+  label: string
+  avgCount: number
+}
+
+export function computeWeeklyDistribution(entries: WatchEntry[]): WeeklyBucket[] {
+  const dayCounts = new Array(7).fill(0)
+  for (const entry of entries) {
+    dayCounts[getDay(entry.timestamp)]++
+  }
+
+  const weekSet = new Set(entries.map((e) => {
+    const ws = startOfWeek(e.timestamp, { weekStartsOn: 1 })
+    return format(ws, "yyyy-MM-dd")
+  }))
+  const totalWeeks = Math.max(1, weekSet.size)
+
+  const ordered = [1, 2, 3, 4, 5, 6, 0]
+  return ordered.map((day) => ({
+    day,
+    label: DAY_NAMES[day],
+    avgCount: Math.round((dayCounts[day] / totalWeeks) * 100) / 100,
+  }))
 }
 
 export interface SearchTermStats {

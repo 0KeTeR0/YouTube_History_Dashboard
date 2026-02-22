@@ -1,11 +1,12 @@
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 import { format } from "date-fns"
 import { fr } from "date-fns/locale"
 import { Film, Clock, Users, Trash2, Calendar, TrendingUp, Trophy, BarChart3 } from "lucide-react"
 import { BarChart, Bar, ResponsiveContainer, XAxis, YAxis, Tooltip as RTooltip } from "recharts"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { ChannelAvatar } from "@/components/ui/channel-avatar"
-import { useData } from "@/context/DataContext"
+import { ChannelBubbleCloud } from "@/components/charts/ChannelBubbleCloud"
+import { useFilter } from "@/context/FilterContext"
 import { computeOverview, computeTimeline, computeChannelStats } from "@/lib/analytics"
 import { formatDuration, formatNumber } from "@/lib/utils"
 
@@ -34,22 +35,28 @@ function StatCard({ icon: Icon, label, value, sub }: {
 }
 
 export default function OverviewPage() {
-  const { watchEntries, videoDetails, channelDetails } = useData()
+  const { filteredEntries, videoDetails, channelDetails } = useFilter()
+  const [bubbleMetric, setBubbleMetric] = useState<"watchTime" | "videoCount">("videoCount")
 
   const overview = useMemo(
-    () => computeOverview(watchEntries, videoDetails),
-    [watchEntries, videoDetails],
+    () => computeOverview(filteredEntries, videoDetails),
+    [filteredEntries, videoDetails],
+  )
+
+  const channelStats = useMemo(
+    () => computeChannelStats(filteredEntries, videoDetails, channelDetails),
+    [filteredEntries, videoDetails, channelDetails],
   )
 
   const monthlyTimeline = useMemo(
-    () => computeTimeline(watchEntries, videoDetails, "month"),
-    [watchEntries, videoDetails],
+    () => computeTimeline(filteredEntries, videoDetails, "month"),
+    [filteredEntries, videoDetails],
   )
 
-  const topChannels = useMemo(() => {
-    const stats = computeChannelStats(watchEntries, videoDetails, channelDetails)
-    return stats.sort((a, b) => b.videoCount - a.videoCount).slice(0, 8)
-  }, [watchEntries, videoDetails, channelDetails])
+  const topChannels = useMemo(
+    () => [...channelStats].sort((a, b) => b.videoCount - a.videoCount).slice(0, 8),
+    [channelStats],
+  )
 
   const hasWatchTime = overview.totalWatchTimeSec > 0
 
@@ -63,6 +70,20 @@ export default function OverviewPage() {
             : "Aucune donnée"}
         </p>
       </div>
+
+      {/* Bubble Cloud */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">Top 50 chaînes</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ChannelBubbleCloud
+            channelStats={channelStats}
+            metric={bubbleMetric}
+            onMetricChange={setBubbleMetric}
+          />
+        </CardContent>
+      </Card>
 
       {/* KPI Cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -123,7 +144,12 @@ export default function OverviewPage() {
             </div>
             <p className="text-xl font-bold">{overview.mostActiveDay.count} vidéos</p>
             <p className="text-sm text-muted-foreground">
-              {overview.mostActiveDay.date && format(new Date(overview.mostActiveDay.date), "d MMMM yyyy", { locale: fr })}
+              {overview.mostActiveDay.date && format(new Date(overview.mostActiveDay.date), "d MMMM yyyy ", { locale: fr })}
+              {hasWatchTime && overview.mostActiveDay.watchTimeSec > 0 && (
+              <span className="text-xs text-muted-foreground mt-0.5">
+                ({formatDuration(overview.mostActiveDay.watchTimeSec)} de watch time)
+              </span>
+            )}
             </p>
           </CardContent>
         </Card>

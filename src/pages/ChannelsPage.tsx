@@ -8,24 +8,27 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { ChannelAvatar } from "@/components/ui/channel-avatar"
-import { useData } from "@/context/DataContext"
-import { computeChannelStats, computeTopChannelPerYear, computeChannelDiscoveries } from "@/lib/analytics"
+import { useFilter } from "@/context/FilterContext"
+import { computeChannelStats, computeChannelDiscoveries } from "@/lib/analytics"
 import { formatDuration, formatNumber } from "@/lib/utils"
 
 type SortKey = "videoCount" | "uniqueVideoCount" | "totalWatchTimeSec" | "firstSeen" | "percentWatched"
+type CompareMode = "gte" | "lte" | "eq"
 
 const PER_PAGE = 25
 
 export default function ChannelsPage() {
-  const { watchEntries, videoDetails, channelDetails } = useData()
+  const { filteredEntries, videoDetails, channelDetails } = useFilter()
   const [sortKey, setSortKey] = useState<SortKey>("videoCount")
   const [sortAsc, setSortAsc] = useState(false)
   const [search, setSearch] = useState("")
   const [page, setPage] = useState(0)
+  const [compareMode, setCompareMode] = useState<CompareMode>("gte")
+  const [compareValue, setCompareValue] = useState("")
 
   const allStats = useMemo(
-    () => computeChannelStats(watchEntries, videoDetails, channelDetails),
-    [watchEntries, videoDetails, channelDetails],
+    () => computeChannelStats(filteredEntries, videoDetails, channelDetails),
+    [filteredEntries, videoDetails, channelDetails],
   )
 
   const filtered = useMemo(() => {
@@ -34,25 +37,28 @@ export default function ChannelsPage() {
       const q = search.toLowerCase()
       list = list.filter((c) => c.channelName.toLowerCase().includes(q))
     }
+    const numVal = parseInt(compareValue, 10)
+    if (compareValue && !isNaN(numVal)) {
+      list = list.filter((c) => {
+        if (compareMode === "gte") return c.videoCount >= numVal
+        if (compareMode === "lte") return c.videoCount <= numVal
+        return c.videoCount === numVal
+      })
+    }
     list.sort((a, b) => {
       const av = a[sortKey] instanceof Date ? (a[sortKey] as Date).getTime() : (a[sortKey] as number)
       const bv = b[sortKey] instanceof Date ? (b[sortKey] as Date).getTime() : (b[sortKey] as number)
       return sortAsc ? av - bv : bv - av
     })
     return list
-  }, [allStats, search, sortKey, sortAsc])
+  }, [allStats, search, sortKey, sortAsc, compareMode, compareValue])
 
   const totalPages = Math.ceil(filtered.length / PER_PAGE)
   const paginated = filtered.slice(page * PER_PAGE, (page + 1) * PER_PAGE)
 
-  const topPerYear = useMemo(
-    () => computeTopChannelPerYear(watchEntries, channelDetails),
-    [watchEntries, channelDetails],
-  )
-
   const discoveries = useMemo(
-    () => computeChannelDiscoveries(watchEntries),
-    [watchEntries],
+    () => computeChannelDiscoveries(filteredEntries),
+    [filteredEntries],
   )
 
   const avgDiscovery = discoveries.length > 0
@@ -70,10 +76,10 @@ export default function ChannelsPage() {
   const SortButton = ({ k, children }: { k: SortKey; children: React.ReactNode }) => (
     <button
       onClick={() => handleSort(k)}
-      className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground cursor-pointer"
+      className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground cursor-pointer justify-end w-full"
     >
       {children}
-      {sortKey === k && <ArrowUpDown className="h-3 w-3" />}
+      {sortKey === k && <ArrowUpDown className="h-3 w-3 shrink-0" />}
     </button>
   )
 
@@ -83,26 +89,6 @@ export default function ChannelsPage() {
         <h1 className="text-2xl font-bold tracking-tight">Chaînes</h1>
         <p className="text-muted-foreground">{formatNumber(allStats.length)} chaînes uniques</p>
       </div>
-
-      {/* Top channel per year */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">Chaîne la plus visionnée par année</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-wrap gap-3">
-            {topPerYear.map((t) => (
-              <div key={t.year} className="flex items-center gap-2 rounded-lg bg-muted/50 px-3 py-2">
-                <ChannelAvatar src={t.thumbnail} name={t.channelName} className="h-6 w-6 text-[10px]" />
-                <div>
-                  <p className="text-sm font-medium">{t.channelName}</p>
-                  <p className="text-xs text-muted-foreground">{t.year} — {t.count} vidéos</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
 
       {/* Channel discoveries chart */}
       <Card>
@@ -133,14 +119,47 @@ export default function ChannelsPage() {
       {/* Channel table */}
       <Card>
         <CardHeader className="pb-3">
-          <div className="flex items-center justify-between gap-4">
-            <CardTitle className="text-base">Toutes les chaînes</CardTitle>
-            <Input
-              placeholder="Rechercher..."
-              value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(0) }}
-              className="max-w-xs h-9"
-            />
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-4">
+              <CardTitle className="text-base">Toutes les chaînes</CardTitle>
+              <Input
+                placeholder="Rechercher..."
+                value={search}
+                onChange={(e) => { setSearch(e.target.value); setPage(0) }}
+                className="max-w-xs h-9"
+              />
+            </div>
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-muted-foreground shrink-0">Vidéos :</span>
+              <select
+                value={compareMode}
+                onChange={(e) => { setCompareMode(e.target.value as CompareMode); setPage(0) }}
+                className="h-8 rounded-md border border-border bg-background px-2 text-sm cursor-pointer"
+              >
+                <option value="gte">Au moins</option>
+                <option value="lte">Au plus</option>
+                <option value="eq">Exactement</option>
+              </select>
+              <Input
+                type="number"
+                min={0}
+                placeholder="—"
+                value={compareValue}
+                onChange={(e) => { setCompareValue(e.target.value); setPage(0) }}
+                className="w-20 h-8"
+              />
+              {compareValue && (
+                <button
+                  onClick={() => { setCompareValue(""); setPage(0) }}
+                  className="text-xs text-muted-foreground hover:text-foreground cursor-pointer"
+                >
+                  ✕
+                </button>
+              )}
+              <span className="text-xs text-muted-foreground ml-1">
+                {filtered.length} résultat{filtered.length > 1 ? "s" : ""}
+              </span>
+            </div>
           </div>
         </CardHeader>
         <CardContent>
@@ -150,11 +169,11 @@ export default function ChannelsPage() {
                 <tr className="border-b border-border">
                   <th className="text-left pb-3 pl-2 w-10">#</th>
                   <th className="text-left pb-3">Chaîne</th>
-                  <th className="text-right pb-3 px-2"><SortButton k="videoCount">Vidéos</SortButton></th>
-                  <th className="text-right pb-3 px-2"><SortButton k="uniqueVideoCount">Uniques</SortButton></th>
-                  {hasWatchTime && <th className="text-right pb-3 px-2"><SortButton k="totalWatchTimeSec">Watch time</SortButton></th>}
-                  {hasWatchTime && <th className="text-right pb-3 px-2"><SortButton k="percentWatched">% vu</SortButton></th>}
-                  <th className="text-right pb-3 px-2"><SortButton k="firstSeen">Découverte</SortButton></th>
+                  <th className="pb-3 px-2 w-24"><SortButton k="videoCount">Vidéos</SortButton></th>
+                  <th className="pb-3 px-2 w-24"><SortButton k="uniqueVideoCount">Uniques</SortButton></th>
+                  {hasWatchTime && <th className="pb-3 px-2 w-28"><SortButton k="totalWatchTimeSec">Watch time</SortButton></th>}
+                  {hasWatchTime && <th className="pb-3 px-2 w-20"><SortButton k="percentWatched">% vu</SortButton></th>}
+                  <th className="pb-3 px-2 w-28"><SortButton k="firstSeen">Découverte</SortButton></th>
                 </tr>
               </thead>
               <tbody>

@@ -17,6 +17,8 @@ export interface RawSearchEntry {
   activityControls: string[]
 }
 
+export type EntryType = "video" | "short" | "post"
+
 export interface WatchEntry {
   videoId: string | null
   title: string
@@ -24,6 +26,7 @@ export interface WatchEntry {
   channelId: string | null
   timestamp: Date
   isRemoved: boolean
+  entryType: EntryType
 }
 
 export interface SearchEntry {

@@ -6,7 +6,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RTooltip } from "r
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
-import { useData } from "@/context/DataContext"
+import { useFilter } from "@/context/FilterContext"
 import { computeVideoStats, computeDurationDiversity } from "@/lib/analytics"
 import { formatDuration, formatNumber, videoThumbnail } from "@/lib/utils"
 
@@ -54,17 +54,17 @@ function VideoCard({ v, stat }: {
 }
 
 export default function VideosPage() {
-  const { watchEntries, videoDetails } = useData()
+  const { filteredEntries, videoDetails } = useFilter()
   const [activeTab, setActiveTab] = useState("rewatched")
 
   const allVideoStats = useMemo(
-    () => computeVideoStats(watchEntries, videoDetails),
-    [watchEntries, videoDetails],
+    () => computeVideoStats(filteredEntries, videoDetails),
+    [filteredEntries, videoDetails],
   )
 
   const durationDiversity = useMemo(
-    () => computeDurationDiversity(watchEntries, videoDetails),
-    [watchEntries, videoDetails],
+    () => computeDurationDiversity(filteredEntries, videoDetails),
+    [filteredEntries, videoDetails],
   )
 
   const mostRewatched = useMemo(

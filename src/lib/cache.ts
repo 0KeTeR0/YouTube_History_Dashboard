@@ -55,6 +55,7 @@ export async function loadWatchEntries(): Promise<WatchEntry[]> {
   return all.map(({ id: _id, ...rest }) => ({
     ...rest,
     timestamp: new Date(rest.timestamp),
+    entryType: rest.entryType || "video",
   }))
 }
 
